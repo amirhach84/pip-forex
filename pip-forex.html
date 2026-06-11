@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Pip" />
+  <meta name="theme-color" content="#080B10" />
+  <title>Pip — עוזר מסחר</title>
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #080B10; color: #DDE4ED; font-family: -apple-system, 'Inter', system-ui, sans-serif; }
+    @keyframes pulse { 0%,100%{opacity:.3;transform:scale(.8)} 50%{opacity:1;transform:scale(1)} }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #080B10; }
+    ::-webkit-scrollbar-thumb { background: #1C2530; border-radius: 2px; }
+    input::placeholder { color: #556070; }
+    button { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const MODEL = "claude-sonnet-4-20250514";
+const API_KEY = "YOUR_API_KEY_HERE"; // ← הכנס כאן את ה-API key שלך
+
+const TRADER_PROFILE = `אתה "Pip" — עוזר מסחר אישי חכם ומקצועי לסוחר פורקס.
+פרופיל הסוחר:
+- סוחר בעיקר GBPJPY, לוט 0.08
+- נוטה לסחור BUY בלבד — חולשה שצריך לאתגר
+- ספג הפסד גדול ב-NFP כי לא ניהל פוזיציה לפני חדשות
+- נוטה לover-trading ביום הפסד
+- כשמנצח — נוטה לצאת מוקדם מדי
+כללי תגובה:
+- ישיר ותמציתי בעברית
+- מזהיר מטעויות פסיכולוגיות לפי הפרופיל
+- אם יש news קרוב — תמיד מזכיר אותו`;
+
+const C = {
+  bg:"#080B10",surface:"#0F1419",card:"#141B24",border:"#1C2530",
+  accent:"#00D4AA",blue:"#3B82F6",warn:"#F59E0B",danger:"#EF4444",
+  text:"#DDE4ED",muted:"#556070",mutedLight:"#8896A8"
+};
+
+const apiHeaders = {
+  "Content-Type": "application/json",
+  "x-api-key": API_KEY,
+  "anthropic-version": "2023-06-01",
+  "anthropic-dangerous-direct-browser-access": "true"
+};
+
+async function callAgent(messages) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST", headers: apiHeaders,
+    body: JSON.stringify({ model:MODEL, max_tokens:1000, system:TRADER_PROFILE, messages })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content?.filter(b=>b.type==="text").map(b=>b.text).join("\n") || "שגיאה";
+}
+
+async function analyzeImages(previews) {
+  const imageContent = previews.map(p=>({type:"image",source:{type:"base64",media_type:p.mimeType,data:p.base64}}));
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST", headers: apiHeaders,
+    body: JSON.stringify({
+      model:MODEL, max_tokens:1500, system:TRADER_PROFILE,
+      messages:[{role:"user",content:[
+        ...imageContent,
+        {type:"text",text:`אלו ${previews.length} צילומי מסך של היסטוריית trades מ-MT5. נתח את כולם יחד:\n1. סטטיסטיקות: win rate, סהכ רווח/הפסד\n2. דפוסי טעויות חוזרות\n3. ניתוח פסיכולוגי\n4. 3 המלצות קונקרטיות\nענה בעברית.`}
+      ]}]
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content?.filter(b=>b.type==="text").map(b=>b.text).join("") || "שגיאה";
+}
+
+function Spinner({text}) {
+  return (
+    <div style={{padding:28,textAlign:"center"}}>
+      {text && <div style={{fontSize:13,color:C.mutedLight,marginBottom:12}}>{text}</div>}
+      <div style={{display:"flex",justifyContent:"center",gap:6}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{width:7,height:7,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function fmtMsg(text) {
+  return text.split("\n").map((line,i)=>{
+    const bold = line.replace(/\*\*(.*?)\*\*/g,(_,t)=>`<strong>${t}</strong>`);
+    return <div key={i} style={{marginBottom:line===""?6:1}} dangerouslySetInnerHTML={{__html:bold||"&nbsp;"}}/>;
+  });
+}
+
+const EVENTS = [
+  {date:"2026-06-13",time:"18:00",event:"החלטת ריבית Fed (FOMC)",impact:"high",currency:"USD",forecast:"4.25%",prev:"4.25%"},
+  {date:"2026-06-13",time:"18:30",event:"Powell מסיבת עיתונאים",impact:"high",currency:"USD",forecast:"--",prev:"--"},
+  {date:"2026-06-16",time:"12:30",event:"Retail Sales ארהב",impact:"medium",currency:"USD",forecast:"0.2%",prev:"-0.1%"},
+  {date:"2026-06-17",time:"09:00",event:"CPI אירופה",impact:"medium",currency:"EUR",forecast:"2.2%",prev:"2.2%"},
+  {date:"2026-06-17",time:"12:30",event:"Unemployment Claims",impact:"medium",currency:"USD",forecast:"220K",prev:"215K"},
+  {date:"2026-06-18",time:"01:30",event:"BOJ החלטת ריבית",impact:"high",currency:"JPY",forecast:"0.5%",prev:"0.5%"},
+  {date:"2026-06-18",time:"06:00",event:"CPI בריטניה",impact:"high",currency:"GBP",forecast:"3.1%",prev:"3.5%"},
+  {date:"2026-06-20",time:"12:30",event:"NFP + Unemployment",impact:"high",currency:"USD",forecast:"185K",prev:"177K"},
+];
+
+function NewsTab() {
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = EVENTS.filter(e=>e.date>=today);
+  const IC = {high:C.danger,medium:C.warn};
+  const grouped = {};
+  upcoming.forEach(e=>{if(!grouped[e.date])grouped[e.date]=[];grouped[e.date].push(e);});
+  const fmtDate = d=>{try{return new Date(d+"T00:00:00").toLocaleDateString("he-IL",{weekday:"long",day:"numeric",month:"long"});}catch{return d;}};
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+        <span style={{fontSize:11,color:C.muted}}>📅 אירועים קרובים</span>
+        <a href="https://www.myfxbook.com/forex-economic-calendar" target="_blank" rel="noreferrer"
+          style={{marginRight:"auto",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",color:C.accent,fontSize:11,textDecoration:"none",background:"none"}}>
+          🔗 myfxbook
+        </a>
+      </div>
+      {Object.entries(grouped).sort().map(([date,evs])=>(
+        <div key={date} style={{marginBottom:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:date===today?C.accent:C.muted,letterSpacing:"0.8px",textTransform:"uppercase",marginBottom:8,display:"flex",gap:8,alignItems:"center"}}>
+            {fmtDate(date)}
+            {date===today&&<span style={{background:C.accent,color:"#000",fontSize:10,padding:"1px 6px",borderRadius:4}}>היום</span>}
+          </div>
+          {evs.map((e,i)=>(
+            <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderLeft:`3px solid ${IC[e.impact]||C.muted}`,borderRadius:8,padding:"11px 13px",marginBottom:6,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{minWidth:44,fontSize:12,color:C.mutedLight}}>{e.time}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600}}>{e.event}</div>
+                <div style={{fontSize:11,color:C.mutedLight,marginTop:2}}>
+                  תחזית: <span style={{color:C.text}}>{e.forecast}</span> · קודם: <span style={{color:C.text}}>{e.prev}</span>
+                </div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:10,fontWeight:700,color:IC[e.impact]||C.muted,background:(IC[e.impact]||C.muted)+"20",border:`1px solid ${(IC[e.impact]||C.muted)}35`,padding:"2px 7px",borderRadius:4}}>{e.currency}</div>
+                <div style={{fontSize:10,color:C.muted,marginTop:3}}>{e.impact==="high"?"🔴":"🟡"}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      {upcoming.length===0&&<div style={{textAlign:"center",padding:32,color:C.muted}}><div style={{fontSize:32}}>✅</div><div style={{marginTop:8}}>אין אירועים קרובים</div></div>}
+    </div>
+  );
+}
+
+function TradesTab({savedState,onStateChange,onSaveAnalysis}) {
+  const [previews,setPreviews] = useState(savedState?.previews||[]);
+  const [analysis,setAnalysis] = useState(savedState?.analysis||"");
+  const [loading,setLoading] = useState(false);
+  const inputRef = useRef();
+
+  const handleFiles = fileList=>{
+    const arr = Array.from(fileList);
+    if(!arr.length)return;
+    setAnalysis("");
+    const newP=[];let loaded=0;
+    arr.forEach(f=>{
+      const r=new FileReader();
+      r.onload=e=>{
+        newP.push({dataUrl:e.target.result,base64:e.target.result.split(",")[1],mimeType:f.type,name:f.name});
+        loaded++;
+        if(loaded===arr.length){setPreviews([...newP]);if(onStateChange)onStateChange({previews:[...newP],analysis:""});}
+      };
+      r.readAsDataURL(f);
+    });
+  };
+
+  const analyze = async()=>{
+    if(!previews.length)return;
+    setLoading(true);
+    try{
+      const result = await analyzeImages(previews);
+      setAnalysis(result);
+      if(onSaveAnalysis)onSaveAnalysis({files:previews.map(p=>p.name),analysis:result,time:new Date().toISOString()});
+      if(onStateChange)onStateChange({previews,analysis:result});
+    }catch(e){setAnalysis("שגיאה: "+e.message);}
+    setLoading(false);
+  };
+
+  const remove = i=>{const p=previews.filter((_,idx)=>idx!==i);setPreviews(p);setAnalysis("");if(onStateChange)onStateChange({previews:p,analysis:""});};
+
+  return (
+    <div>
+      <div style={{fontSize:13,color:C.mutedLight,marginBottom:14}}>העלה צילומי מסך מ-MT5 — אפשר כמה תמונות</div>
+      <div style={{background:C.card,border:`2px dashed ${C.border}`,borderRadius:12,padding:"24px 20px",textAlign:"center",cursor:"pointer",marginBottom:14}}
+        onClick={()=>inputRef.current.click()}>
+        <input ref={inputRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>handleFiles(e.target.files)}/>
+        <div style={{fontSize:36,marginBottom:8}}>📸</div>
+        <div style={{fontSize:14,fontWeight:600}}>העלה צילומי מסך מ-MT5</div>
+        <div style={{fontSize:12,color:C.muted,marginTop:4}}>לחץ לבחירה — אפשר כמה תמונות</div>
+      </div>
+      {previews.length>0&&(
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:12,color:C.muted,marginBottom:8}}>{previews.length} תמונות:</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {previews.map((p,i)=>(
+              <div key={i} style={{position:"relative"}}>
+                <img src={p.dataUrl} style={{width:"100%",borderRadius:8,border:`1px solid ${C.border}`,display:"block"}}/>
+                <button onClick={()=>remove(i)} style={{position:"absolute",top:4,left:4,background:C.danger,border:"none",borderRadius:"50%",width:22,height:22,cursor:"pointer",color:"#fff",fontSize:14,lineHeight:1}}>×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {previews.length>0&&!loading&&(
+        <button onClick={analyze} style={{width:"100%",padding:"13px",background:C.accent,border:"none",borderRadius:10,fontSize:14,fontWeight:700,cursor:"pointer",color:"#000"}}>
+          🔍 נתח {previews.length>1?`${previews.length} תמונות`:"תמונה"}
+        </button>
+      )}
+      {loading&&<Spinner text={`מנתח... זה לוקח ~15 שניות`}/>}
+      {analysis&&(
+        <div style={{background:C.card,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"16px 18px",marginTop:14,fontSize:13,lineHeight:1.7}}>
+          {fmtMsg(analysis)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatTab() {
+  const [messages,setMessages] = useState([{role:"assistant",content:"שלום! אני Pip 📈\n\nאני מכיר את סגנון המסחר שלך על GBPJPY ויכול לעזור בזמן אמת.\n\nשאל אותי כל שאלה."}]);
+  const [input,setInput] = useState("");
+  const [loading,setLoading] = useState(false);
+  const bottomRef = useRef();
+  useEffect(()=>{bottomRef.current?.scrollIntoView({behavior:"smooth"});},[messages]);
+
+  const send = async()=>{
+    const text=input.trim();
+    if(!text||loading)return;
+    setInput("");
+    const newMsgs=[...messages,{role:"user",content:text}];
+    setMessages(newMsgs);setLoading(true);
+    try{const reply=await callAgent(newMsgs);setMessages(prev=>[...prev,{role:"assistant",content:reply}]);}
+    catch(e){setMessages(prev=>[...prev,{role:"assistant",content:"שגיאה: "+e.message}]);}
+    setLoading(false);
+  };
+
+  const quick=["האם כדאי לסחור עכשיו?","מה ה-news החשוב היום?","יש לי פוזיציה פתוחה — מה לעשות?"];
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 180px)",minHeight:400}}>
+      <div style={{flex:1,overflowY:"auto",paddingBottom:12}}>
+        {messages.map((m,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start",marginBottom:12}}>
+            {m.role==="assistant"&&<div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${C.accent},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,marginRight:8,flexShrink:0,marginTop:2}}>🤖</div>}
+            <div style={{maxWidth:"80%",background:m.role==="user"?C.accent:C.card,color:m.role==="user"?"#000":C.text,border:m.role==="user"?"none":`1px solid ${C.border}`,borderRadius:m.role==="user"?"16px 16px 4px 16px":"4px 16px 16px 16px",padding:"10px 14px",fontSize:13,lineHeight:1.6}}>
+              {fmtMsg(m.content)}
+            </div>
+          </div>
+        ))}
+        {loading&&(
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${C.accent},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>🤖</div>
+            <div style={{display:"flex",gap:4}}>{[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>)}</div>
+          </div>
+        )}
+        <div ref={bottomRef}/>
+      </div>
+      {messages.length<=2&&(
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+          {quick.map((q,i)=><button key={i} onClick={()=>setInput(q)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:20,padding:"6px 12px",color:C.mutedLight,fontSize:12,cursor:"pointer"}}>{q}</button>)}
+        </div>
+      )}
+      <div style={{display:"flex",gap:8}}>
+        <input style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 14px",color:C.text,fontSize:14,outline:"none"}}
+          value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="שאל את Pip..."/>
+        <button onClick={send} disabled={loading||!input.trim()} style={{background:C.accent,border:"none",borderRadius:10,width:44,cursor:"pointer",fontSize:18,opacity:loading||!input.trim()?0.4:1}}>↑</button>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab,setTab] = useState(0);
+  const [journal,setJournal] = useState([]);
+  const [uploadState,setUploadState] = useState(null);
+  const tabs=[{icon:"💬",label:"Pip"},{icon:"📸",label:"Trades"},{icon:"📅",label:"News"}];
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,direction:"rtl"}}>
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 20px",display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:10}}>
+        <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${C.accent},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🤖</div>
+        <div>
+          <div style={{fontSize:15,fontWeight:700}}>Pip</div>
+          <div style={{fontSize:11,color:C.accent}}>● פעיל • עוזר מסחר אישי</div>
+        </div>
+        <div style={{marginLeft:"auto",fontSize:11,color:C.muted}}>GBPJPY • פורקס</div>
+      </div>
+      <div style={{maxWidth:520,margin:"0 auto",padding:"16px 16px 90px"}}>
+        {tab===0&&<ChatTab/>}
+        {tab===1&&<TradesTab savedState={uploadState} onStateChange={setUploadState} onSaveAnalysis={e=>setJournal(p=>[...p,e])}/>}
+        {tab===2&&<NewsTab/>}
+      </div>
+      <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",padding:"8px 0 20px"}}>
+        {tabs.map((t,i)=>(
+          <button key={i} onClick={()=>setTab(i)} style={{flex:1,background:"none",border:"none",cursor:"pointer",padding:"6px 0",color:tab===i?C.accent:C.muted}}>
+            <div style={{fontSize:22,marginBottom:2}}>{t.icon}</div>
+            <div style={{fontSize:11,fontWeight:500}}>{t.label}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
